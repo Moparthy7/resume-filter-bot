@@ -1,50 +1,79 @@
+import streamlit as st
 import os
 import docx
-import streamlit as st
+import PyPDF2
+import re
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-# Read text from .docx file
-def read_docx(file_path):
-    doc = docx.Document(file_path)
-    return '\n'.join([para.text for para in doc.paragraphs])
+# Function to extract text from .docx file
+def read_docx(file):
+    doc = docx.Document(file)
+    fullText = []
+    for para in doc.paragraphs:
+        fullText.append(para.text)
+    return '\n'.join(fullText)
+
+# Function to extract text from .pdf file
+def read_pdf(file):
+    reader = PyPDF2.PdfReader(file)
+    text = ''
+    for page in reader.pages:
+        text += page.extract_text()
+    return text
+
+# Function to convert number words to integers
+number_words = {
+    'one': 1,
+    'two': 2,
+    'three': 3,
+    'four': 4,
+    'five': 5,
+    'six': 6,
+    'seven': 7,
+    'eight': 8,
+    'nine': 9,
+    'ten': 10
+}
+
+def extract_number_from_prompt(prompt):
+    numbers = re.findall(r'\d+', prompt)
+    if numbers:
+        return int(numbers[0])
+    for word in prompt.lower().split():
+        if word in number_words:
+            return number_words[word]
+    return 3  # Default value if nothing is found
 
 # Streamlit UI
-st.title("📄 Resume Matcher Chatbot")
+st.title("Resume Filter Chatbot")
 
-st.write("Upload multiple DOCX resumes and paste a job description. We'll rank top candidates for you!")
+uploaded_files = st.file_uploader("Upload Resumes (PDF or DOCX)", accept_multiple_files=True)
+job_description = st.text_area("Paste the Job Description")
+prompt = st.text_input("What do you want the bot to do?", "Find top 3 candidates")
 
-# Upload resumes
-uploaded_files = st.file_uploader("Upload Resumes (.docx)", type="docx", accept_multiple_files=True)
+if uploaded_files and job_description and prompt:
+    num_candidates = extract_number_from_prompt(prompt)
 
-# Paste job description
-job_description = st.text_area("Paste Job Description Here")
-
-# Match button
-if st.button("Find Top Candidates"):
-    if not uploaded_files or not job_description.strip():
-        st.warning("Please upload resumes and enter a job description.")
-    else:
-        resume_texts = []
-        resume_names = []
-        for file in uploaded_files:
+    resumes = []
+    for file in uploaded_files:
+        if file.name.endswith('.docx'):
             text = read_docx(file)
-            resume_texts.append(text)
-            resume_names.append(file.name)
+        elif file.name.endswith('.pdf'):
+            text = read_pdf(file)
+        else:
+            st.warning(f"Unsupported file type: {file.name}")
+            continue
+        resumes.append((file.name, text))
 
-        # TF-IDF matching
-        documents = resume_texts + [job_description]
-        vectorizer = TfidfVectorizer(stop_words="english")
-        tfidf_matrix = vectorizer.fit_transform(documents)
-        jd_vector = tfidf_matrix[-1]
-        resume_vectors = tfidf_matrix[:-1]
-        similarities = cosine_similarity(jd_vector, resume_vectors)[0]
+    corpus = [job_description] + [res[1] for res in resumes]
+    vectorizer = TfidfVectorizer()
+    tfidf_matrix = vectorizer.fit_transform(corpus)
 
-        # Rank resumes
-        scored_resumes = list(zip(resume_names, similarities))
-        ranked = sorted(scored_resumes, key=lambda x: x[1], reverse=True)
+    scores = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:]).flatten()
+    results = list(zip([res[0] for res in resumes], scores))
+    results.sort(key=lambda x: x[1], reverse=True)
 
-        # Display top 3
-        st.subheader("🏆 Top 3 Candidates:")
-        for i, (name, score) in enumerate(ranked[:3], 1):
-            st.write(f"**{i}. {name}** — Score: `{score:.2f}`")
+    st.subheader(f"Top {num_candidates} Candidate(s):")
+    for i in range(min(num_candidates, len(results))):
+        st.write(f"{i+1}. {results[i][0]} - Match Score: {results[i][1]:.2f}")
